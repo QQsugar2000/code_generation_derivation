@@ -3,10 +3,20 @@ import random
 import csv
 import re
 from datetime import datetime
-from prompt import *
-from qwen_api import qwen_inference, qwen_inference_no_image
-from gpt_api import gpt_infer, gpt_infer_no_image
+from utils.prompt import *
+# from qwen_api import qwen_inference, qwen_inference_no_image
+from utils.qwen_api import QwenClient
+# from utils.gpt_api import gpt_infer, gpt_infer_no_image
 import json
+
+qwen_code = QwenClient(
+        api_key="EMPTY",
+        base_url=".....",
+        model="qwen3-235b-a22b-fp8")
+qwen_image = QwenClient(
+        api_key="EMPTY",
+        base_url=".....",
+        model="qwen2.5-vl-72b-instruct")
 
 def read_code_from_csv(file_path):
     with open('test.csv', newline='') as f:
@@ -16,8 +26,7 @@ def read_code_from_csv(file_path):
         print(original_code)
     return original_code
 
-    
-def generate_code_single(image_path, output_dir='/home/c50047709/cyn-workspace/code-generation/gen_code_result'):
+def generate_code_single_qwen235b(image_path, output_dir='/home/c50047709/cyn-workspace/code-generation/data/gen_code_result_0509'):
     '''
     生成 spec 并提取代码，将结果保存为 JSON 文件。
     参数:
@@ -27,12 +36,18 @@ def generate_code_single(image_path, output_dir='/home/c50047709/cyn-workspace/c
       - 提取的代码字符串
     '''
     # 1. 生成 spec
-    spec_res = gpt_infer(image_path, spec_v1_dsx)
-    formatted_code_prompt = code_prompt_new.replace('{spec_input}', spec_res)
-    print('✅ spec 获取成功，开始生成代码')
+    spec_res = qwen_image.infer_with_image(image_path, spec_prompt)
+    match = re.search(r'```spec\n(.*?)\n```', spec_res, re.DOTALL)
+    extracted_spec = match.group(1).strip()
+    formatted_code_prompt = code_prompt_new.replace('{spec_input}', extracted_spec)
+    if extracted_spec:
+        print('✅ spec 获取成功，开始生成代码')
+    else:
+        print(' spec 获取失败，开始生成代码')
+        return None
 
     # 2. 生成代码
-    code_res = gpt_infer_no_image(formatted_code_prompt)
+    code_res = qwen_code.infer_text(formatted_code_prompt)
 
     # 3. 提取 ```jsx 和 ``` 之间的代码
     code_pattern = r'```jsx\n(.*?)\n```'
@@ -61,7 +76,57 @@ def generate_code_single(image_path, output_dir='/home/c50047709/cyn-workspace/c
     print(f'✅ 数据已保存到 {json_path}')
     return extracted_code,spec_res
 
-def derival_spec_single(image_path,spec, output_dir='/home/c50047709/cyn-workspace/code-generation/gen_code_result'):
+def generate_code_single(image_path, output_dir='/home/c50047709/cyn-workspace/code-generation/data/gen_code_result_0509'):
+    '''
+    生成 spec 并提取代码，将结果保存为 JSON 文件。
+    参数:
+      - image_path: 输入图片路径
+      - output_dir: 保存 JSON 的目录
+    返回:
+      - 提取的代码字符串
+    '''
+    # 1. 生成 spec
+    spec_res = qwen_image.infer_with_image(image_path, spec_prompt)
+    match = re.search(r'```spec\n(.*?)\n```', spec_res, re.DOTALL)
+    extracted_spec = match.group(1).strip()
+    formatted_code_prompt = code_prompt_new.replace('{spec_input}', extracted_spec)
+    if extracted_spec:
+        print('✅ spec 获取成功，开始生成代码')
+    else:
+        print(' spec 获取失败，开始生成代码')
+        return None
+
+    # 2. 生成代码
+    code_res = qwen_code.infer_text(formatted_code_prompt)
+
+    # 3. 提取 ```jsx 和 ``` 之间的代码
+    code_pattern = r'```jsx\n(.*?)\n```'
+    match = re.search(code_pattern, code_res, re.DOTALL)
+    if match:
+        extracted_code = match.group(1).strip()
+    else:
+        extracted_code = 'Error: No valid code block found'
+
+    # 4. 保存到 JSON
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 使用图片文件名（不带扩展名）来命名 JSON
+    image_name = os.path.splitext(os.path.basename(image_path))[0]
+    json_path = os.path.join(output_dir, f'{image_name}_origin_code.json')
+
+    data = {
+        'image_path': image_path,
+        'spec_res': spec_res,
+        'extracted_code': extracted_code
+    }
+
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+    print(f'✅ 数据已保存到 {json_path}')
+    return extracted_code,spec_res
+
+def derival_spec_single(image_path,spec, output_dir='/home/c50047709/cyn-workspace/code-generation/data/gen_code_result_0509'):
     '''
     生成 spec 并提取代码，将结果保存为 JSON 文件。
     参数:
@@ -73,12 +138,19 @@ def derival_spec_single(image_path,spec, output_dir='/home/c50047709/cyn-workspa
     # 1. 生成 新spec
     print('✅ 开始衍生新的spec')
     formatted_derival_prompt = spec_derive_dsx.replace('{spec_input}', spec)
-    new_sepc = gpt_infer_no_image(formatted_derival_prompt)
+    new_sepc = qwen_code.infer_text(formatted_derival_prompt)
+    match = re.search(r'```spec\n(.*?)\n```', new_sepc, re.DOTALL)
+    extracted_spec = match.group(1).strip()
+    if extracted_spec:
+        print('✅ spec 获取成功，开始生成代码')
+    else:
+        print(' spec 获取失败，开始生成代码')
+        return None
 
     # 2. 生成代码
-    formatted_code_prompt = code_prompt_new.replace('{spec_input}', new_sepc)
+    formatted_code_prompt = code_prompt_new.replace('{spec_input}', extracted_spec)
     print('✅ 衍生spec 获取成功，开始生成代码')    
-    code_res = gpt_infer_no_image(formatted_code_prompt)
+    code_res = qwen_code.infer_text(formatted_code_prompt)
 
     # 3. 提取 ```jsx 和 ``` 之间的代码
     code_pattern = r'```jsx\n(.*?)\n```'
@@ -105,7 +177,7 @@ def derival_spec_single(image_path,spec, output_dir='/home/c50047709/cyn-workspa
         json.dump(data, f, ensure_ascii=False, indent=4)
 
     print(f'✅ 衍生spec和衍生code数据已保存到 {json_path}')
-    return extracted_code,spec
+    return extracted_code
 
 def generate_code_and_save_to_csv(folder_path, write_to_file=False):
     # 获取当前时间戳，用于命名CSV文件
