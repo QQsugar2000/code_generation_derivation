@@ -1,10 +1,19 @@
 # main.py
 
-from .utils.render import render_and_capture
-from .utils.gpt_api import gpt_infer_no_image  # 替换为你实际定义 gpt_infer_no_image 的模块路径
-from .utils.prompt import check_prompt
+from render import render_and_capture
+from utils.prompt import check_prompt
 import re,sys,time
 import logging,os,json
+from utils.qwen_api import QwenClient
+
+qwen_code = QwenClient(
+        api_key="EMPTY",
+        base_url="...",
+        model="qwen3-235b-a22b-fp8")
+qwen_image = QwenClient(
+        api_key="EMPTY",
+        base_url="...",
+        model="qwen2.5-vl-72b-instruct")
 
 # 日志配置
 logging.basicConfig(
@@ -45,9 +54,9 @@ def analyze_render_errors(url: str, screenshot_path: str, wait_selector: str = N
     if code_text:
         parts.extend([f"\n\n=== 相关代码（来自 {code_path}）===\n", code_text])
     final_prompt = "".join(parts)
-
+    print(final_prompt)
     # 调用 GPT 推理
-    analysis = gpt_infer_no_image(final_prompt)
+    analysis = qwen_code.infer_text(final_prompt)
 
     # 提取代码块
     match = re.search(r'```jsx\n(.*?)\n```', analysis, re.DOTALL)
@@ -63,7 +72,7 @@ def iterative_debug(
     wait_selector: str = "#root",
     screenshot: str = "1.png",
     max_attempts: int = 3,
-    log_dir: str = '/home/c50047709/cyn-workspace/code-generation/gen_code_result'
+    log_dir: str = '/home/c50047709/cyn-workspace/code-generation/data/gen_code_result_0509',
 ) -> bool:
     """
     循环最多 max_attempts 次：
@@ -123,7 +132,6 @@ def iterative_debug(
 
         # 记录修复代码到日志
         logging.info(f"=== 尝试 {attempt} GPT 修复代码 ===\n{fixed_code}")
-        time.sleep(1)
         # 将修复后的代码写回
         try:
             with open(code_path, 'w', encoding='utf-8') as f:
@@ -133,7 +141,20 @@ def iterative_debug(
             debug_log['result'] = 'error_writing'
             _save_debug_log(code_path, debug_log, log_dir)
             return False
+    try:
+        with open(code_path, 'r', encoding='utf-8') as f:
+            current_code = f.read()
+    except Exception as e:
+            logging.error(f"尝试 {attempt} 读取代码失败：{e}")
+            current_code = ''
 
+    # 尝试渲染并捕获错误
+    success, errors = render_and_capture(url, screenshot, wait_selector)
+    if success:
+        print("✅ 页面渲染成功，调试结束。")
+        debug_log['result'] = 'success'
+        _save_debug_log(code_path, debug_log, log_dir)
+        return True
     # 达到最大次数仍未成功
     print("❌ 达到最大调试次数，仍未成功渲染。")
     debug_log['result'] = 'failed'
