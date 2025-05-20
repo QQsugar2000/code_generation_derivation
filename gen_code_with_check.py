@@ -1,9 +1,9 @@
-from gen_code_with_spec import generate_code_single, derival_spec_single
+from gen_code_with_spec import generate_code_single, derival_spec_single, generate_code_withspec
 # import code_check.render
 from code_debug import iterative_debug
 import sys,os
-import time
-
+import time,json
+from utils.prompt import base_spec_propmt, code_prompt_v2,spc_dsx_v2
 def batch_process_images(
     src_folder: str,
     code_path: str,
@@ -24,23 +24,28 @@ def batch_process_images(
     os.makedirs(dest_folder, exist_ok=True)
 
     for fname in os.listdir(src_folder):
-        if not fname.lower().endswith((".png", ".jpg", ".jpeg")):
+        
+        if not fname.lower().endswith((".json", ".jpg", ".jpeg")):
             continue
 
         base_name = os.path.splitext(fname)[0]
-        screenshot_path = os.path.join(dest_folder, f"{base_name}.png")
+        spec_img_path = os.path.join(dest_folder, f"{base_name}.png")
 
         # 跳过已存在的截图
-        if os.path.exists(screenshot_path):
+        if os.path.exists(spec_img_path):
             print(f"⏭️ {fname} 对应的截图已存在，跳过")
             continue
-
-        img_path = os.path.join(src_folder, fname)
-        print(f"\n🔄 处理图片：{img_path}")
+        time.sleep(1)
+        spec_path = os.path.join(src_folder, fname)
+        print(f"\n🔄 处理spec：{spec_path}")
+        with open(spec_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)   # data 现在是一个 Python 字典（dict）
+            spec = data['spec_res']
+            img_path = data['image_path']
 
         # 1. 生成代码并写入 App.js
         try:
-            code,spec = generate_code_single(img_path)
+            code,spec = generate_code_withspec(img_path, spec,DEST_FOLDER,spc_dsx_v2, code_prompt_v2)
             with open(code_path, "w", encoding="utf-8") as f:
                 f.write(code)
             print("✅ 生成并写入代码成功")
@@ -52,44 +57,46 @@ def batch_process_images(
             code_path,
             port,
             wait_selector,
-            screenshot=screenshot_path
+            screenshot=spec_img_path,
+            log_dir=DEST_FOLDER
         )
 
         if success:
-            print(f"✅ {fname} 调试并截图完成：{screenshot_path}")
+            print(f"✅ {fname} 调试并截图完成：{spec_img_path}")
         else:
             print(f"❌ {fname} 调试未成功，请查看 json 和 GPT 建议")
 
-        # 3. 对spec进行衍生
-        try:
-            newcode = derival_spec_single(img_path,spec)
-            with open(code_path, "w", encoding="utf-8") as f:
-                f.write(newcode)
-            print("✅ 衍生新spec并写入代码成功")
-        except Exception as e:
-            print(f"⚠️ 衍生后的spec生成或写入代码失败：{e}")
-            continue
-        screenshot_path = os.path.join(dest_folder, f"derived_{base_name}.png")
-        # 2. 调用 iterative_debug，生成专属截图
-        success = iterative_debug(
-            code_path,
-            port,
-            wait_selector,
-            screenshot=screenshot_path
-        )
+        # # 3. 对spec进行衍生
+        # try:
+        #     newcode = derival_spec_single(img_path,spec,DEST_FOLDER)
+        #     with open(code_path, "w", encoding="utf-8") as f:
+        #         f.write(newcode)
+        #     print("✅ 衍生新spec并写入代码成功")
+        # except Exception as e:
+        #     print(f"⚠️ 衍生后的spec生成或写入代码失败：{e}")
+        #     continue
+        # screenshot_path = os.path.join(dest_folder, f"derived_{base_name}.png")
+        # # 2. 调用 iterative_debug，生成专属截图
+        # success = iterative_debug(
+        #     code_path,
+        #     port,
+        #     wait_selector,
+        #     screenshot=screenshot_path
+        # )
 
-        if success:
-            print(f"✅ {fname} 衍生后调试并截图完成：{screenshot_path}")
-        else:
-            print(f"❌ {fname} 衍生后调试未成功，请查看 json 和 GPT 建议")
+        # if success:
+        #     print(f"✅ {fname} 衍生后调试并截图完成：{screenshot_path}")
+        # else:
+        #     print(f"❌ {fname} 衍生后调试未成功，请查看 json 和 GPT 建议")
 
 
 if __name__ == "__main__":
-    SRC_FOLDER   = "/home/c50047709/cyn-workspace/code-generation/data/test_0506"
-    DEST_FOLDER  = "/home/c50047709/cyn-workspace/code-generation/data/result_0509_v2"
-    CODE_PATH    = "/home/c50047709/cyn-workspace/code-generation/code-generation/src/App.js"
+    SRC_FOLDER   = r"D:\xdw_test\myfolder\code-generation\data\all_spec_0516"
+    # SRC_FOLDER = "/home/c50047709/cyn-workspace/images"
+    DEST_FOLDER  = r"D:\xdw_test\myfolder\code-generation\data\sft_data_v2_qwen3235b"
+    CODE_PATH    = r"D:\xdw_test\code-generation\code-generation\src\App.js"
     WAIT_SELECTOR = "#root"
-    PORT         = 3000
+    PORT         = 3001
     os.makedirs(DEST_FOLDER, exist_ok=True)
     batch_process_images(
         SRC_FOLDER,
