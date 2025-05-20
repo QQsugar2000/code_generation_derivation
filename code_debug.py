@@ -5,14 +5,15 @@ from utils.prompt import check_prompt
 import re,sys,time
 import logging,os,json
 from utils.qwen_api import QwenClient
-
+from utils.gpt_api import gpt_infer_no_image, gpt_infer
+from pathlib import Path
 qwen_code = QwenClient(
         api_key="EMPTY",
-        base_url="...",
+        base_url="http://10.44.53.178:8000/v1",
         model="qwen3-235b-a22b-fp8")
 qwen_image = QwenClient(
         api_key="EMPTY",
-        base_url="...",
+        base_url="http://10.44.53.177:8000/v1",
         model="qwen2.5-vl-72b-instruct")
 
 # 日志配置
@@ -25,7 +26,19 @@ logging.basicConfig(
     ]
 )
 
-def analyze_render_errors(url: str, screenshot_path: str, wait_selector: str = None, code_path: str = None):
+def read_code_file(path: str) -> str:
+    """
+    先以二进制读入，再尝试用 utf-8 解码，
+    若遇到 UnicodeDecodeError 则忽略错误继续读完。
+    """
+    with open(path, 'rb') as f:
+        raw = f.read()
+    try:
+        return raw.decode('utf-8')
+    except UnicodeDecodeError:
+        return raw.decode('utf-8', errors='ignore')
+
+def analyze_render_errors(url: str, screenshot_path: str, wait_selector: str = None, code_path: str = None, debug_model = "o4-mini"):
     """
     1. 调用 render_and_capture 渲染页面并截图
     2. 如果有错误，把错误日志 + 指定代码文件内容 拼成一个 prompt
@@ -44,19 +57,23 @@ def analyze_render_errors(url: str, screenshot_path: str, wait_selector: str = N
     code_text = ""
     if code_path:
         try:
-            with open(code_path, "r", encoding="utf-8") as f:
-                code_text = f.read()
+            code_text = read_code_file(code_path)
+            print(f"✅ 已读取 {code_path}，共 {len(code_text)} 字符")
         except Exception as e:
             print(f"⚠️ 无法读取代码文件 {code_path}：{e}")
 
     # 构造 prompt
     parts = [check_prompt, "\n\n=== 前端渲染错误 ===\n", error_text]
-    if code_text:
+    if len(code_text)>100:
         parts.extend([f"\n\n=== 相关代码（来自 {code_path}）===\n", code_text])
+        parts.extend(["\n\n不要出现使用注释来省略代码。请保证每次生成的代码都包含了完整的页面。\n\n"])
+    else:
+        print('没提取到需要debug的代码')
     final_prompt = "".join(parts)
-    print(final_prompt)
+    print('😊尝试debug的prompt总长度约为',len(final_prompt))
     # 调用 GPT 推理
-    analysis = qwen_code.infer_text(final_prompt)
+    # analysis = qwen_code.infer_text(final_prompt)
+    analysis = gpt_infer_no_image(final_prompt,model_used=debug_model)
 
     # 提取代码块
     match = re.search(r'```jsx\n(.*?)\n```', analysis, re.DOTALL)
@@ -71,8 +88,9 @@ def iterative_debug(
     port: int,
     wait_selector: str = "#root",
     screenshot: str = "1.png",
-    max_attempts: int = 3,
+    max_attempts: int = 1,
     log_dir: str = '/home/c50047709/cyn-workspace/code-generation/data/gen_code_result_0509',
+    image_path = '/home/c50047709/cyn-workspace/code-generation/data/gen_code_result_0509'
 ) -> bool:
     """
     循环最多 max_attempts 次：
@@ -120,7 +138,15 @@ def iterative_debug(
 
         # 渲染失败，记录错误并调用 GPT 修复
         print(f"❌ 渲染失败，捕获到错误: {errors}")
-        fixed_code = analyze_render_errors(url, screenshot, wait_selector, code_path)
+        screenshot = Path(screenshot)
+        
+        # split stem and suffix
+        stem = screenshot.stem        # "1"
+        suffix = screenshot.suffix    # ".png"
+
+        # construct new filename, e.g. "1-debug.png"
+        debug_screenshot = screenshot.parent / f"{stem}-debug{suffix}"
+        fixed_code = analyze_render_errors(url, debug_screenshot, wait_selector, code_path)
 
         # 记录本次尝试信息
         debug_log['attempts'].append({
@@ -139,7 +165,10 @@ def iterative_debug(
         except Exception as e:
             print(f"⚠️ 写入修复代码失败：{e}")
             debug_log['result'] = 'error_writing'
-            _save_debug_log(code_path, debug_log, log_dir)
+            image_name = os.path.splitext(os.path.basename(image_path))[0]
+            json_path = os.path.join(log_dir, f'{image_name}_debuged_code.json')
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(debug_log, f, ensure_ascii=False, indent=4)
             return False
     try:
         with open(code_path, 'r', encoding='utf-8') as f:
@@ -158,7 +187,7 @@ def iterative_debug(
     # 达到最大次数仍未成功
     print("❌ 达到最大调试次数，仍未成功渲染。")
     debug_log['result'] = 'failed'
-    _save_debug_log(code_path, debug_log, log_dir)
+    _save_debug_log(screenshot, debug_log, log_dir)
     return False
 
 
